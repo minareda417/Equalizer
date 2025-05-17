@@ -1,9 +1,10 @@
 function equalizer_gui
 fs = 44100;
 audioData = randn(1, fs);  % 1-second white noise
-filteredAudio = [];  
+filteredAudio = [];
+
 % create GUI
-fig = uifigure('Name', 'Equalizer', 'Position', [100 100 1000 600]);
+fig = uifigure('Name', 'Equalizer', 'Position', [100 100 1100 600]);
 
 % Mode dropdown
 uilabel(fig, 'Position', [30 550 40 22], 'Text', 'Mode');
@@ -13,8 +14,45 @@ modeDD = uidropdown(fig, ...
     'Value', 'Standard', ...
     'ValueChangedFcn', @(dd,event) modeChanged(dd));
 
+% Filter type dropdown
+uilabel(fig, 'Position', [200 550 60 22], 'Text', 'Filter Type');
+filterTypeDD = uidropdown(fig, ...
+    'Position', [270 550 100 22], ...
+    'Items', {'FIR', 'IIR'}, ...
+    'Value', 'FIR', ...
+    'ValueChangedFcn', @(dd,event) filterTypeChanged(dd));
+
+% FIR window dropdown (tagged)
+uilabel(fig, 'Position', [390 550 60 22], 'Text', 'Window', 'Visible','on', 'Tag','windowLabel');
+windowDD = uidropdown(fig, ...
+    'Position', [450 550 100 22], ...
+    'Items', {'Hamming', 'Hanning', 'Blackman'}, ...
+    'Value', 'Hamming', ...
+    'Visible', 'on', ...
+    'Tag','windowDD');
+
+% IIR type dropdown (hidden initially)
+uilabel(fig, 'Position', [390 550 60 22], 'Text', 'IIR Type', 'Visible','off','Tag','iirLabel');
+iirTypeDD = uidropdown(fig, ...
+    'Position', [450 550 120 22], ...
+    'Items', {'Butterworth', 'Chebychev I', 'Chebychev II'}, ...
+    'Value', 'Butterworth', ...
+    'Visible', 'off', ...
+    'Tag','iirDD', ...
+    'ValueChangedFcn', @(dd,event) iirTypeChanged(dd));
+
+% Chebychev parameters
+uilabel(fig, 'Position', [580 550 30 22], 'Text', 'Rp', 'Visible','off','Tag','rpLabel');
+rpText = uitextarea(fig, 'Position', [610 550 50 22], 'Visible','off','Tag','rpText');
+uilabel(fig, 'Position', [580 550 30 22], 'Text', 'Rs', 'Visible','off','Tag','rsLabel');
+rsText = uitextarea(fig, 'Position', [610 550 50 22], 'Visible','off','Tag','rsText');
+
+% Filter order input
+uilabel(fig, 'Position', [700 550 60 22], 'Text', 'Order', 'Visible','on');
+orderText = uitextarea(fig, 'Position', [760 550 50 22], 'Value','64');
+
 % bands table
-tbl = uitable(fig, 'Position', [30 210 200 230], ...
+tbl = uitable(fig, 'Position', [30 210 250 230], ...
     'ColumnName', {'Start (Hz)', 'End (Hz)'}, ...
     'Data', [], 'ColumnEditable', [true true]);
 tbl.CellEditCallback = @(src, event) onTableEdit(src, event);
@@ -31,26 +69,26 @@ fsBtn = uibutton(fig, ...
     'Text', 'Set Fs', ...
     'Position', [320 500 100 22], ...
     'ButtonPushedFcn', @(btn,event) setFs(fsText));
-% buttons
-applyBtn = uibutton(fig, 'Text', 'Apply', 'Position', [200 550 100 22], ...
+
+% playback and control buttons
+yPosCtrl = 500; % y-position for play/stop/reset
+playBtn = uibutton(fig, 'Text', 'Play', 'Position', [440 yPosCtrl 100 22], ...
+    'ButtonPushedFcn', @(btn,event) playCallback());
+stopBtn = uibutton(fig, 'Text', 'Stop', 'Position', [560 yPosCtrl 100 22], ...
+    'ButtonPushedFcn', @(btn,event) stopCallback());
+resetBtn = uibutton(fig, ...
+    'Text', 'Reset', ...
+    'Position', [680 yPosCtrl 100 22], ...
+    'ButtonPushedFcn', @(btn,event) resetCallback());
+
+% Apply and Load buttons
+applyBtn = uibutton(fig, 'Text', 'Apply', 'Position', [830 550 100 22], ...
     'ButtonPushedFcn', @(btn,event) applyCallback());
-loadBtn = uibutton(fig, 'Text', 'Load Audio', 'Position', [320 550 100 22], ...
+loadBtn = uibutton(fig, 'Text', 'Load Audio', 'Position', [940 550 100 22], ...
     'ButtonPushedFcn', @(btn,event) loadAudioCallback());
 
 % slider panel
-sliderPanel = uipanel(fig, 'Position', [320 20 520 420], 'Title', 'Band Gains (dB)');
-
-% play and stop buttons
-playBtn = uibutton(fig, 'Text', 'Play', 'Position', [440 550 100 22], ...
-    'ButtonPushedFcn', @(btn,event) playCallback());
-stopBtn = uibutton(fig, 'Text', 'Stop', 'Position', [560 550 100 22], ...
-    'ButtonPushedFcn', @(btn,event) stopCallback());
-% reset button
-resetBtn = uibutton(fig, ...
-    'Text', 'Reset', ...
-    'Position', [440 500 100 22], ...
-    'ButtonPushedFcn', @(btn,event) resetCallback());
-
+sliderPanel = uipanel(fig, 'Position', [320 20 760 460], 'Title', 'Band Gains (dB)');
 
 % Initialize with standard bands
 updateTableAndSliders();
@@ -61,199 +99,205 @@ updateTableAndSliders();
         if isequal(file, 0)
             return;
         end
-        [y, f] = audioread(fullfile(path, file));  % Read the audio file
-        audioData = y';  % Store audio data
-        fs = f;  % Sampling frequency
+        [y, f] = audioread(fullfile(path, file));
+        audioData = y';
+        fs = f;
         uialert(fig, 'Audio loaded successfully!', 'Audio Loaded');
     end
 
 %% apply callback
     function applyCallback()
-        bands = tbl.Data;  % get the bands from the table
-        if strcmp(modeDD.Value, 'Standard')
-        else
-            if ~validateBands(bands)
-                uialert(fig, 'Custom bands must start at 0 Hz, end at 20 kHz, and be 5–10 continuous bands.', 'Invalid Bands');
-                return;
+        bands = tbl.Data;
+        if strcmp(modeDD.Value, 'Custom') && ~validateBands(bands)
+            uialert(fig, 'Custom bands must start at 0 Hz, end at 20 kHz, and be 5–10 continuous bands.', 'Invalid Bands');
+            return;
+        end
+        n = str2double(orderText.Value);
+        filteredAudio = zeros(size(audioData));
+        for i = 1:size(bands,1)
+            f1 = bands(i,1);
+            f2 = bands(i,2);
+            gain_dB = getSliderGain(i);
+            gain_lin = 10^(gain_dB/20);
+            Wn = [f1 f2]/(fs/2);
+            switch filterTypeDD.Value
+                case 'FIR'
+                    switch windowDD.Value
+                        case 'Hamming', win = hamming(n+1);
+                        case 'Hanning', win = hanning(n+1);
+                        case 'Blackman', win = blackman(n+1);
+                    end
+                    b = fir1(n, Wn, win);
+                    a = 1;
+                case 'IIR'
+                    switch iirTypeDD.Value
+                        case 'Butterworth'
+                            [b,a] = butter(n, Wn);
+                        case 'Chebychev I'
+                            rp = str2double(rpText.Value);
+                            [b,a] = cheby1(n, rp, Wn);
+                        case 'Chebychev II'
+                            rs = str2double(rsText.Value);
+                            [b,a] = cheby2(n, rs, Wn);
+                    end
             end
+            section = filter(b, a, audioData);
+            filteredAudio = filteredAudio + gain_lin * section;
         end
-
-        % fft of the signal
-        n = length(audioData);
-        signalFreq = fft(audioData);
-        freq = (0:n-1) * fs / n;
-
-        % initialize gain to one
-        gain = ones(size(signalFreq));
-
-        % apply gain in each band to the mask
-        for i = 1:size(bands, 1)
-            f1 = bands(i, 1);
-            f2 = bands(i, 2);
-
-            gain_dB = getSliderGain(i);            
-            gain_lin = 10^(gain_dB / 20);           
-
-            mask = (freq >= f1 & freq <= f2);     
-            gain(mask) = gain(mask) * gain_lin;     
-        end
-        filteredFreq = signalFreq .* gain;
-        filteredAudio = real(ifft(filteredFreq));
-
         uialert(fig, 'Filtered audio ready. Press Play to hear it!', 'Audio Filtered');
         figure;
-        t = (0:length(audioData)-1)/fs; 
+        t = (0:length(audioData)-1)/fs;
         plot(t, filteredAudio, 'r', 'DisplayName', 'Filtered Signal'); hold on;
         plot(t, audioData, 'b', 'DisplayName', 'Original Signal');
         title('Original vs Filtered Signal (Time Domain)');
-        xlabel('Time (s)');
-        ylabel('Amplitude');
-        legend;
-        grid on;
-
-        ylabel('Amplitude');
-
+        xlabel('Time (s)'); ylabel('Amplitude'); legend; grid on;
     end
 
-%% callback to play
+%% filter type changed
+    function filterTypeChanged(dd)
+        winLbl    = findobj(fig,'Tag','windowLabel');
+        winDD     = findobj(fig,'Tag','windowDD');
+        iirLbl    = findobj(fig,'Tag','iirLabel');
+        iirDD     = findobj(fig,'Tag','iirDD');
+        rpLbl     = findobj(fig,'Tag','rpLabel');
+        rpTxt     = findobj(fig,'Tag','rpText');
+        rsLbl     = findobj(fig,'Tag','rsLabel');
+        rsTxt     = findobj(fig,'Tag','rsText');
+        if strcmp(dd.Value,'FIR')
+            winLbl.Visible = 'on';
+            winDD.Visible  = 'on';
+            iirLbl.Visible = 'off';
+            iirDD.Visible  = 'off';
+            rpLbl.Visible  = 'off';
+            rpTxt.Visible  = 'off';
+            rsLbl.Visible  = 'off';
+            rsTxt.Visible  = 'off';
+        else
+            winLbl.Visible = 'off';
+            winDD.Visible  = 'off';
+            iirLbl.Visible = 'on';
+            iirDD.Visible  = 'on';
+            % update Cheby visibility
+            iirTypeChanged(iirDD);
+        end
+    end
+
+%% IIR type changed
+    function iirTypeChanged(dd)
+        rpLbl = findobj(fig,'Tag','rpLabel');
+        rpTxt = findobj(fig,'Tag','rpText');
+        rsLbl = findobj(fig,'Tag','rsLabel');
+        rsTxt = findobj(fig,'Tag','rsText');
+        rpLbl.Visible = 'off'; rpTxt.Visible = 'off';
+        rsLbl.Visible = 'off'; rsTxt.Visible = 'off';
+        switch dd.Value
+            case 'Chebychev I'
+                rpLbl.Visible = 'on'; rpTxt.Visible = 'on';
+            case 'Chebychev II'
+                rsLbl.Visible = 'on'; rsTxt.Visible = 'on';
+        end
+    end
+
+%% play callback
     function playCallback()
         if isempty(filteredAudio)
-            uialert(fig, 'No filtered audio to play. Please apply filters first.', 'Error');
+            uialert(fig,'No filtered audio to play. Please apply filters first.','Error');
             sound(audioData,fs);
         else
-            sound(filteredAudio, fs);  % play the filtered audio
-            disp('Playing filtered audio.');
+            sound(filteredAudio,fs);
         end
     end
 
-%% callback to stop
+%% stop callback
     function stopCallback()
-        clear sound;  % stop audio 
-        disp('Audio stopped.');
+        clear sound;
     end
 
-%% helper function to update table and sliders based on mode
+%% update table/sliders
     function updateTableAndSliders()
-        if strcmp(modeDD.Value, 'Standard')
-            % standard bands
-            tbl.Data = [0 200; 200 500; 500 800; 800 1200; 1200 3000; ...
-                3000 6000; 6000 12000; 12000 16000; 16000 20000];
+        if strcmp(modeDD.Value,'Standard')
+            tbl.Data = [0 200;200 500;500 800;800 1200;1200 3000;3000 6000;6000 12000;12000 16000;16000 20000];
             addBandBtn.Visible = 'off';
         else
-
-            % initialize if empty or less than 5 rows
-            if isempty(tbl.Data) || size(tbl.Data, 1) < 5
-                tbl.Data = zeros(5, 2);
+            if isempty(tbl.Data) || size(tbl.Data,1)<5
+                tbl.Data = zeros(5,2);
             end
             addBandBtn.Visible = 'on';
         end
-
-        % clear previous sliders
-        delete(findall(sliderPanel, 'Type', 'uislider'));
-        delete(findall(sliderPanel, 'Type', 'uilabel'));
-
-        % sliders for each frequency band
-        numBands = size(tbl.Data, 1);
-        sliderWidth = 300;
-        sliderSpacing = 40;
-        topY = 360; 
-        labelOffsetY = -8;  
-
-        for i = 1:numBands
-            bandStart = tbl.Data(i, 1);
-            bandEnd = tbl.Data(i, 2);
-            bandLabel = sprintf('%d–%d Hz', bandStart, bandEnd);
-
-          
-            yPos = topY - (i - 1) * sliderSpacing;
-
-            
-            uilabel(sliderPanel, ...
-                'Position', [30, yPos + labelOffsetY, 100, 22], ...
-                'Text', bandLabel);
-
-            uislider(sliderPanel, ...
-                'Position', [150, yPos, sliderWidth, 3], ...
-                'Limits', [-12 12], ...
-                'Value', 0, ...
-                'Tag', ['GainSlider' num2str(i)]);
+        delete(findall(sliderPanel,'Type','uislider'));
+        delete(findall(sliderPanel,'Type','uilabel'));
+        numBands = size(tbl.Data,1);
+        sliderWidth = 300; sliderSpacing = 40; topY = 360; offsetY = -8;
+        for i=1:numBands
+            lbl = sprintf('%d–%d Hz', tbl.Data(i,1), tbl.Data(i,2));
+            y = topY - (i-1)*sliderSpacing;
+            uilabel(sliderPanel,'Position',[30,y+offsetY,100,22],'Text',lbl);
+            uislider(sliderPanel,'Position',[150,y,sliderWidth,3],'Limits',[-12 12],'Value',0,'Tag',['GainSlider' num2str(i)]);
         end
-
     end
 
-%% helper function to get gain from the slider
-    function gain_dB = getSliderGain(bandIndex)
-        slider = findall(sliderPanel, 'Tag', ['GainSlider' num2str(bandIndex)]);
-        gain_dB = slider.Value;  
+%% get slider gain
+    function g = getSliderGain(idx)
+        s = findall(sliderPanel,'Tag',['GainSlider' num2str(idx)]);
+        g = s.Value;
     end
-%% helper function to add custom bands
+
+%% add custom band
     function addCustomBand()
-        currentData = tbl.Data;
-        numRows = size(currentData, 1);
-
-        if numRows < 10
-            if numRows == 0
-                newRow = [0 0];
+        data = tbl.Data;
+        r = size(data,1);
+        if r < 10
+            if r == 0
+                new = [0 0];
             else
-                newRow = [currentData(end, 2) 0];  % start from last end
+                new = [data(end,2) 0];
             end
-
-            tbl.Data = [currentData; newRow];  % append new row
-            updateTableAndSliders();           % refresh sliders
+            tbl.Data = [data; new];
+            updateTableAndSliders();
         else
-            uialert(fig, 'Maximum of 10 bands allowed.', 'Limit Reached');
+            uialert(fig,'Maximum of 10 bands allowed.','Limit Reached');
         end
     end
 
-
-%% helper function to validate custom bands
-    function isValid = validateBands(b)
-        isValid = true;
-        if size(b, 1) < 5 || size(b, 1) > 10 || b(1, 1) ~= 0 || b(end, 2) ~= 20000
-            isValid = false; return;
-        end
-        for i = 2:size(b, 1)
-            if b(i, 1) ~= b(i - 1, 2)
-                isValid = false; return;
-            end
+%% validate bands
+    function ok = validateBands(b)
+        ok = true;
+        if size(b,1)<5 || size(b,1)>10 || b(1,1)~=0 || b(end,2)~=20000, ok=false; return; end
+        for i=2:size(b,1)
+            if b(i,1)~=b(i-1,2), ok=false; return; end
         end
     end
-%% helper function to handle change of mode
+
+%% mode changed
     function modeChanged(dd)
-        if strcmp(dd.Value, 'Custom')
-            tbl.Data = zeros(5, 2);  % clear table data on switch to custom mode
+        if strcmp(dd.Value,'Custom')
+            tbl.Data=zeros(5,2);
             addBandBtn.Visible = 'on';
         else
             addBandBtn.Visible = 'off';
         end
         updateTableAndSliders();
     end
-%% helper function to update table edit
-    function onTableEdit(src, event)
+
+%% table edit
+    function onTableEdit(~,~)
         updateTableAndSliders();
     end
-%% set sampling frequency callback
-    function setFs(fsText)
-        valStr = fsText.Value;
-        valNum = str2double(valStr);
-        if isnan(valNum) || valNum <= 0
-            uialert(fsText.Parent, 'Please enter a valid positive number for sampling frequency.', 'Invalid Input');
+
+%% set Fs
+    function setFs(txt)
+        v = str2double(txt.Value);
+        if isnan(v) || v <= 0
+            uialert(txt.Parent,'Please enter valid positive Fs.','Invalid Input');
         else
-            fs = valNum;
-            disp(['Sampling frequency set to: ' num2str(fs) ' Hz']);
+            fs = v;
         end
     end
-%% reset callback
+
+%% reset
     function resetCallback()
-        % reset mode to 'Standard'
         modeDD.Value = 'Standard';
-
-        % reset table data to default standard bands
-        tbl.Data = [0 200; 200 500; 500 800; 800 1200; 1200 3000; ...
-            3000 6000; 6000 12000; 12000 16000; 16000 20000];
-
+        tbl.Data = [0 200;200 500;500 800;800 1200;1200 3000;3000 6000;6000 12000;12000 16000;16000 20000];
         updateTableAndSliders();
     end
-
-
 end
