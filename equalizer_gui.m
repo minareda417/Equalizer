@@ -104,58 +104,70 @@ updateTableAndSliders();
         fs = f;
         uialert(fig, 'Audio loaded successfully!', 'Audio Loaded');
     end
-
 %% apply callback
-    function applyCallback()
-        bands = tbl.Data;
-        if strcmp(modeDD.Value, 'Custom') && ~validateBands(bands)
-            uialert(fig, 'Custom bands must start at 0 Hz, end at 20 kHz, and be 5–10 continuous bands.', 'Invalid Bands');
-            return;
-        end
-        n = str2double(orderText.Value);
-        filteredAudio = zeros(size(audioData));
-        for i = 1:size(bands,1)
-            f1 = bands(i,1);
-            f2 = bands(i,2);
-            gain_dB = getSliderGain(i);
-            gain_lin = 10^(gain_dB/20);
-            epsilon = 1e-6; % buffer to avoid 0 values
-            if f1 == 0
-                f1 = epsilon * fs/2;
-            end
-            if f2 >= fs/2
-                f2 = (1 - epsilon) * fs/2;
-            end
-            Wn = [f1 f2]/(fs/2);
-            switch filterTypeDD.Value
-                case 'FIR'
-                    switch windowDD.Value
-                        case 'Hamming', win = hamming(n+1);
-                        case 'Hanning', win = hanning(n+1);
-                        case 'Blackman', win = blackman(n+1);
-                    end
-                    b = fir1(n, Wn, win);
-                    a = 1;
-                case 'IIR'
-                    switch iirTypeDD.Value
-                        case 'Butterworth'
-                            [b,a] = butter(n, Wn);
-                        case 'Chebychev I'
-                            rp = str2double(rpText.Value);
-                            [b,a] = cheby1(n, rp, Wn);
-                        case 'Chebychev II'
-                            rs = str2double(rsText.Value);
-                            [b,a] = cheby2(n, rs, Wn);
-                    end
-            end
-            section = filter(b, a, audioData);
-            filteredAudio = filteredAudio + gain_lin * section;
-        end
-        uialert(fig, 'Filtered audio ready. Press Play to hear it!', 'Audio Filtered');
+function applyCallback()
+    bands = tbl.Data;
+    if strcmp(modeDD.Value, 'Custom') && ~validateBands(bands)
+        uialert(fig, 'Custom bands must start at 0 Hz, end at 20 kHz, and be 5–10 continuous bands.', 'Invalid Bands');
+        return;
+    end
 
-        figure('Name', sprintf('Filter Analysis [%d-%d Hz]', f1, f2), 'NumberTitle', 'off');
+    n = str2double(orderText.Value);
+    filteredAudio = zeros(size(audioData));
+    scenedir = 'filter_analysis'; 
+    if ~exist(scenedir, 'dir')
+        mkdir(scenedir);
+    end
 
-        % 1. Time Domain
+    for i = 1:size(bands,1)
+        f1 = bands(i,1);
+        f2 = bands(i,2);
+        gain_dB = getSliderGain(i);
+        gain_lin = 10^(gain_dB/20);
+        epsilon = 1e-6;
+
+        if f1 == 0
+            f1 = epsilon * fs/2;
+        end
+        if f2 >= fs/2
+            f2 = (1 - epsilon) * fs/2;
+        end
+
+        Wn = [f1 f2]/(fs/2);
+        label = filterTypeDD.Value;
+        windowLabel = '';
+        switch filterTypeDD.Value
+            case 'FIR'
+                switch windowDD.Value
+                    case 'Hamming', win = hamming(n+1); windowLabel = 'Hamming';
+                    case 'Hanning', win = hanning(n+1); windowLabel = 'Hanning';
+                    case 'Blackman', win = blackman(n+1); windowLabel = 'Blackman';
+                end
+                b = fir1(n, Wn, win);
+                a = 1;
+            case 'IIR'
+                switch iirTypeDD.Value
+                    case 'Butterworth'
+                        [b,a] = butter(n, Wn);
+                        windowLabel = 'Butterworth';
+                    case 'Chebychev I'
+                        rp = str2double(rpText.Value);
+                        [b,a] = cheby1(n, rp, Wn);
+                        windowLabel = 'Cheby I';
+                    case 'Chebychev II'
+                        rs = str2double(rsText.Value);
+                        [b,a] = cheby2(n, rs, Wn);
+                        windowLabel = 'Cheby II';
+                end
+        end
+
+        section = filter(b, a, audioData);
+        filteredAudio = filteredAudio + gain_lin * section;
+
+        % save figure
+        figPlot = figure('Visible', 'off', 'Name', sprintf('Filter Analysis [%d-%d Hz]', f1, f2), 'NumberTitle', 'off');
+        
+        % time domain
         subplot(2,3,1);
         t = (0:length(audioData)-1)/fs;
         plot(t, filteredAudio, 'r', t, audioData, 'b');
@@ -163,40 +175,48 @@ updateTableAndSliders();
         xlabel('Time (s)'); ylabel('Amplitude');
         legend('Filtered', 'Original'); grid on;
 
-        % 2. Frequency Response (Magnitude)
+        % frequency response
         subplot(2,3,2);
         [H, f_axis] = freqz(b, a, 1024, fs);
         plot(f_axis, 20*log10(abs(H)), 'LineWidth', 1.2);
         title('Frequency Response (Magnitude)');
         xlabel('Frequency (Hz)'); ylabel('Magnitude (dB)'); grid on;
 
-        % 3. Phase Response (Wrapped)
+        % phase response
         subplot(2,3,3);
         plot(f_axis, angle(H) * 180/pi, 'LineWidth', 1.2);
-        title('Phase Response (Wrapped)');
-        xlabel('Frequency (Hz)'); ylabel('Phase (degrees)'); grid on;
+        title('Phase Response');
+        xlabel('Frequency (Hz)'); ylabel('Phase (°)'); grid on;
 
-        % 4. Impulse Response
+        % impulse response
         subplot(2,3,4);
         impulse_response = filter(b, a, [1; zeros(99,1)]);
         stem(0:99, impulse_response, 'filled');
         title('Impulse Response');
         xlabel('Samples'); ylabel('Amplitude'); grid on;
 
-        % 5. Step Response
+        % step response
         subplot(2,3,5);
         step_response = filter(b, a, ones(100,1));
         plot(0:99, step_response, 'LineWidth', 1.2);
         title('Step Response');
         xlabel('Samples'); ylabel('Amplitude'); grid on;
 
-        % 6. Pole-Zero Plot
+       % pole zero plot
         subplot(2,3,6);
         zplane(b, a);
         title('Poles and Zeros'); grid on;
 
-
+        sgtitle(sprintf('Band: %d–%d Hz | Fs = %d Hz | %s %s', round(f1), round(f2), fs, label, windowLabel));
+        saveas(figPlot, fullfile(scenedir, sprintf('analysis_%s_%d_%d.png', label, round(f1), round(f2))));
+        close(figPlot);
     end
+
+    uialert(fig, 'Filtered audio ready. Press Play to hear it!', 'Audio Filtered');
+
+    audiowrite(fullfile(scenedir, 'filtered_output.wav'), filteredAudio, fs);
+end
+
 
 %% filter type changed
     function filterTypeChanged(dd)
