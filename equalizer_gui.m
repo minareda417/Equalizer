@@ -63,7 +63,7 @@ addBandBtn = uibutton(fig, ...
     'ButtonPushedFcn', @(btn, event) addCustomBand());
 
 % sampling frequency text box
-uilabel(fig, 'Position', [30 500 150 22], 'Text', 'Sampling Frequency');
+fsDisplayLabel = uilabel(fig, 'Position', [30 500 150 22], 'Text', ['Current fs: ' num2str(fs) ' Hz']);
 fsText = uitextarea(fig, 'Position', [200 500 100 22]);
 fsBtn = uibutton(fig, ...
     'Text', 'Set Fs', ...
@@ -119,6 +119,13 @@ updateTableAndSliders();
             f2 = bands(i,2);
             gain_dB = getSliderGain(i);
             gain_lin = 10^(gain_dB/20);
+            epsilon = 1e-6; % buffer to avoid 0 values
+            if f1 == 0
+                f1 = epsilon * fs/2;
+            end
+            if f2 >= fs/2
+                f2 = (1 - epsilon) * fs/2;
+            end
             Wn = [f1 f2]/(fs/2);
             switch filterTypeDD.Value
                 case 'FIR'
@@ -145,12 +152,50 @@ updateTableAndSliders();
             filteredAudio = filteredAudio + gain_lin * section;
         end
         uialert(fig, 'Filtered audio ready. Press Play to hear it!', 'Audio Filtered');
-        figure;
+
+        figure('Name', sprintf('Filter Analysis [%d-%d Hz]', f1, f2), 'NumberTitle', 'off');
+
+        % 1. Time Domain
+        subplot(2,3,1);
         t = (0:length(audioData)-1)/fs;
-        plot(t, filteredAudio, 'r', 'DisplayName', 'Filtered Signal'); hold on;
-        plot(t, audioData, 'b', 'DisplayName', 'Original Signal');
-        title('Original vs Filtered Signal (Time Domain)');
-        xlabel('Time (s)'); ylabel('Amplitude'); legend; grid on;
+        plot(t, filteredAudio, 'r', t, audioData, 'b');
+        title('Time Domain');
+        xlabel('Time (s)'); ylabel('Amplitude');
+        legend('Filtered', 'Original'); grid on;
+
+        % 2. Frequency Response (Magnitude)
+        subplot(2,3,2);
+        [H, f_axis] = freqz(b, a, 1024, fs);
+        plot(f_axis, 20*log10(abs(H)), 'LineWidth', 1.2);
+        title('Frequency Response (Magnitude)');
+        xlabel('Frequency (Hz)'); ylabel('Magnitude (dB)'); grid on;
+
+        % 3. Phase Response (Wrapped)
+        subplot(2,3,3);
+        plot(f_axis, angle(H) * 180/pi, 'LineWidth', 1.2);
+        title('Phase Response (Wrapped)');
+        xlabel('Frequency (Hz)'); ylabel('Phase (degrees)'); grid on;
+
+        % 4. Impulse Response
+        subplot(2,3,4);
+        impulse_response = filter(b, a, [1; zeros(99,1)]);
+        stem(0:99, impulse_response, 'filled');
+        title('Impulse Response');
+        xlabel('Samples'); ylabel('Amplitude'); grid on;
+
+        % 5. Step Response
+        subplot(2,3,5);
+        step_response = filter(b, a, ones(100,1));
+        plot(0:99, step_response, 'LineWidth', 1.2);
+        title('Step Response');
+        xlabel('Samples'); ylabel('Amplitude'); grid on;
+
+        % 6. Pole-Zero Plot
+        subplot(2,3,6);
+        zplane(b, a);
+        title('Poles and Zeros'); grid on;
+
+
     end
 
 %% filter type changed
@@ -291,6 +336,7 @@ updateTableAndSliders();
             uialert(txt.Parent,'Please enter valid positive Fs.','Invalid Input');
         else
             fs = v;
+            fsDisplayLabel.Text = ['Current fs: ' num2str(fs) ' Hz'];
         end
     end
 
